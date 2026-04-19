@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 🤖 Service ML - Prédiction des Besoins d'Achat
 
 Service de Machine Learning pour prédire intelligemment les besoins d'achat futurs en analysant l'historique des commandes.
@@ -310,3 +311,6 @@ Pour toute question :
 2. Vérifier les logs : `logs/ml_service.log`
 3. Tester avec : `python test_integration.py`
 4. Documentation API : `http://localhost:8000/api/v1/docs`
+=======
+# PI-DEV-ML
+>>>>>>> 7555a628f65455befd2cf93ca8ffddf6d94c8fec
