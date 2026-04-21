@@ -15,7 +15,16 @@ from app.schemas.predictions import (
     BatchPredictionResponse,
     RecommendationsResponse
 )
+from app.schemas.sales_predictions import (
+    SalesForecastRequest,
+    SalesForecastResponse,
+    ClientChurnRequest,
+    ClientChurnResponse,
+    ProductRecommendationRequest,
+    ProductRecommendationResponse
+)
 from app.services.predictor import DemandPredictor
+from app.services.sales_predictor import SalesPredictor
 from app.services.data_processor import DataProcessor
 
 # Configuration des logs
@@ -43,6 +52,7 @@ app.add_middleware(
 
 # Initialisation des services
 predictor = DemandPredictor()
+sales_predictor = SalesPredictor()
 data_processor = DataProcessor()
 
 
@@ -254,3 +264,127 @@ if __name__ == "__main__":
         reload=True,
         log_level=settings.LOG_LEVEL.lower()
     )
+
+
+# ==================== SALES ML ENDPOINTS ====================
+
+@app.post(
+    f"{settings.API_V1_PREFIX}/sales/forecast",
+    response_model=SalesForecastResponse,
+    summary="Prédire les ventes futures",
+    description="Analyse l'historique des ventes et prédit le chiffre d'affaires futur"
+)
+async def forecast_sales(request: SalesForecastRequest):
+    """
+    Prédire les ventes futures basées sur l'historique
+    
+    - **sales_history**: Historique des ventes (min 3 entrées)
+    - **forecast_days**: Horizon de prédiction (défaut: 30 jours)
+    """
+    try:
+        logger.info(f"📊 Prédiction de ventes pour {request.forecast_days} jours")
+        
+        # Validation
+        if len(request.sales_history) < 3:
+            raise HTTPException(
+                status_code=400,
+                detail="Minimum 3 entrées d'historique requises"
+            )
+        
+        # Convertir en dict
+        history = [item.dict() for item in request.sales_history]
+        
+        # Prédiction
+        forecast = sales_predictor.predict_sales_forecast(
+            sales_history=history,
+            forecast_days=request.forecast_days
+        )
+        
+        logger.info(f"✅ Prédiction: {forecast['predicted_sales']:.2f} DT sur {request.forecast_days} jours")
+        return forecast
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Erreur prédiction ventes: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(
+    f"{settings.API_V1_PREFIX}/sales/churn",
+    response_model=ClientChurnResponse,
+    summary="Prédire le risque de perte d'un client",
+    description="Analyse le comportement d'achat et prédit le risque de churn"
+)
+async def predict_churn(request: ClientChurnRequest):
+    """
+    Prédire le risque qu'un client arrête d'acheter
+    
+    - **client_id**: ID du client
+    - **client_history**: Historique d'achats du client
+    """
+    try:
+        logger.info(f"📊 Analyse churn pour client {request.client_id}")
+        
+        # Validation
+        if len(request.client_history) < 2:
+            raise HTTPException(
+                status_code=400,
+                detail="Minimum 2 achats requis pour l'analyse"
+            )
+        
+        # Convertir en dict
+        history = [item.dict() for item in request.client_history]
+        
+        # Prédiction
+        churn_analysis = sales_predictor.predict_client_churn(history)
+        churn_analysis["client_id"] = request.client_id
+        
+        logger.info(f"✅ Risque de churn: {churn_analysis['churn_risk_score']:.3f}")
+        return churn_analysis
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Erreur prédiction churn: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(
+    f"{settings.API_V1_PREFIX}/sales/recommendations",
+    response_model=ProductRecommendationResponse,
+    summary="Recommander des produits à un client",
+    description="Suggère des produits basés sur l'historique d'achat du client"
+)
+async def recommend_products(request: ProductRecommendationRequest):
+    """
+    Recommander des produits personnalisés pour un client
+    
+    - **client_id**: ID du client
+    - **client_purchases**: Historique d'achats
+    - **available_products**: Produits disponibles
+    """
+    try:
+        logger.info(f"📊 Recommandations pour client {request.client_id}")
+        
+        # Convertir en dict
+        purchases = [item.dict() for item in request.client_purchases]
+        products = [item.dict() for item in request.available_products]
+        
+        # Générer recommandations
+        recommendations = sales_predictor.recommend_products(
+            client_purchases=purchases,
+            all_products=products
+        )
+        
+        logger.info(f"✅ {len(recommendations)} produits recommandés")
+        
+        return {
+            "client_id": request.client_id,
+            "recommendations": recommendations,
+            "total_recommendations": len(recommendations)
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Erreur recommandations: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
