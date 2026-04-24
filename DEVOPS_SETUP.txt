@@ -1,0 +1,458 @@
+═══════════════════════════════════════════════════════════════════════════
+                    GUIDE DEVOPS - SERVICE ML
+                         PI-DEV PROJECT
+═══════════════════════════════════════════════════════════════════════════
+
+Ce guide couvre l'infrastructure DevOps complète pour le service ML Python/FastAPI.
+
+═══════════════════════════════════════════════════════════════════════════
+PARTIE 1 : PIPELINES CI/CD
+═══════════════════════════════════════════════════════════════════════════
+
+FICHIERS CRÉÉS :
+----------------
+✅ Jenkinsfile.ci : Pipeline d'intégration continue
+✅ Jenkinsfile.cd : Pipeline de déploiement continu
+
+ÉTAPE 1 : CRÉER LES JOBS JENKINS
+---------------------------------
+
+1. Pipeline ML Service CI :
+   - Nom : ml-service-ci
+   - Type : Pipeline
+   - Pipeline script from SCM
+   - Repository URL : [votre repo]
+   - Script Path : PI-DEV-ML/Jenkinsfile.ci
+   - Build Triggers : Poll SCM (H/5 * * * *)
+
+2. Pipeline ML Service CD :
+   - Nom : ml-service-cd
+   - Type : Pipeline
+   - Pipeline script from SCM
+   - Repository URL : [votre repo]
+   - Script Path : PI-DEV-ML/Jenkinsfile.cd
+   - Parameters :
+     * BUILD_NUMBER (String)
+     * GIT_COMMIT (String)
+     * GIT_BRANCH (String)
+
+ÉTAPE 2 : TESTER LE PIPELINE CI
+--------------------------------
+
+cd PI-DEV-ML
+
+# Installer les dépendances
+python3 -m venv venv
+source venv/bin/activate  # Linux/Mac
+# ou
+venv\Scripts\activate  # Windows
+
+pip install -r requirements.txt
+pip install pytest pytest-cov pytest-asyncio flake8 black pylint bandit safety
+
+# Lancer les tests
+pytest tests/ -v --cov=app --cov-report=html
+
+# Vérifier le linting
+flake8 app/ --max-line-length=120
+black --check app/
+
+# Vérifier la sécurité
+bandit -r app/
+safety check
+
+RÉSULTATS ATTENDUS :
+--------------------
+✅ 15+ tests passent
+✅ Coverage > 70%
+✅ Pas d'erreurs de linting
+✅ Pas de vulnérabilités critiques
+
+═══════════════════════════════════════════════════════════════════════════
+PARTIE 2 : TESTS UNITAIRES
+═══════════════════════════════════════════════════════════════════════════
+
+FICHIERS CRÉÉS :
+----------------
+✅ tests/__init__.py
+✅ tests/test_main.py : Tests des endpoints API (15 tests)
+✅ tests/test_config.py : Tests de configuration (5 tests)
+
+TESTS COUVERTS :
+----------------
+1. Health endpoints (2 tests)
+   - Root endpoint
+   - Health check
+
+2. Prediction endpoints (4 tests)
+   - Données insuffisantes
+   - Données valides
+   - Batch vide
+   - Batch mixte
+
+3. Recommendations (1 test)
+   - Liste vide
+
+4. Configuration (2 tests)
+   - CORS headers
+   - API documentation
+
+5. Async operations (1 test)
+   - Requêtes concurrentes
+
+6. Settings (5 tests)
+   - Valeurs par défaut
+   - Log level
+   - CORS origins
+   - Database URL
+   - ML model path
+
+LANCER LES TESTS :
+------------------
+# Tous les tests
+pytest tests/ -v
+
+# Avec couverture
+pytest tests/ -v --cov=app --cov-report=html
+
+# Tests spécifiques
+pytest tests/test_main.py -v
+pytest tests/test_config.py -v
+
+# Voir le rapport de couverture
+open htmlcov/index.html  # Mac
+start htmlcov/index.html  # Windows
+xdg-open htmlcov/index.html  # Linux
+
+═══════════════════════════════════════════════════════════════════════════
+PARTIE 3 : DOCKER
+═══════════════════════════════════════════════════════════════════════════
+
+FICHIERS CRÉÉS :
+----------------
+✅ Dockerfile : Multi-stage build optimisé
+✅ .dockerignore : Exclusions pour le build
+
+CARACTÉRISTIQUES :
+------------------
+- Multi-stage build (builder + runtime)
+- Image basée sur python:3.11-slim
+- Utilisateur non-root (mluser)
+- Health check intégré
+- Labels OCI standards
+- Taille optimisée (~500MB)
+
+BUILD LOCAL :
+-------------
+cd PI-DEV-ML
+
+# Build de l'image
+docker build -t pi-dev-ml:local .
+
+# Lancer le conteneur
+docker run -d \
+  --name ml-service \
+  -p 8000:8000 \
+  -e DATABASE_URL=postgresql://user:pass@host:5432/db \
+  pi-dev-ml:local
+
+# Vérifier les logs
+docker logs -f ml-service
+
+# Tester l'API
+curl http://localhost:8000/api/v1/health
+
+# Arrêter et supprimer
+docker stop ml-service
+docker rm ml-service
+
+PUSH VERS DOCKER HUB :
+----------------------
+# Login
+docker login -u imen077
+
+# Tag
+docker tag pi-dev-ml:local imen077/pi-dev-ml:1.0.0
+docker tag pi-dev-ml:local imen077/pi-dev-ml:latest
+
+# Push
+docker push imen077/pi-dev-ml:1.0.0
+docker push imen077/pi-dev-ml:latest
+
+═══════════════════════════════════════════════════════════════════════════
+PARTIE 4 : KUBERNETES
+═══════════════════════════════════════════════════════════════════════════
+
+FICHIERS CRÉÉS :
+----------------
+✅ k8s/configmap.yaml : Configuration de l'application
+✅ k8s/secret.yaml : Secrets (DB credentials, API keys)
+✅ k8s/service.yaml : Service NodePort (port 30800)
+✅ k8s/deployment.yaml : Déploiement avec 2 replicas
+✅ k8s/hpa.yaml : Autoscaling 2-5 pods
+
+DÉPLOIEMENT :
+-------------
+cd PI-DEV-ML/k8s
+
+# Créer le namespace (si pas déjà fait)
+kubectl create namespace production
+
+# Appliquer les manifests
+kubectl apply -f secret.yaml
+kubectl apply -f configmap.yaml
+kubectl apply -f service.yaml
+kubectl apply -f deployment.yaml
+kubectl apply -f hpa.yaml
+
+# Vérifier le déploiement
+kubectl get all -n production -l app=ml-service
+
+# Vérifier les pods
+kubectl get pods -n production -l app=ml-service
+
+# Voir les logs
+kubectl logs -f deployment/ml-service -n production
+
+# Tester le service
+kubectl get nodes -o wide  # Obtenir l'IP du nœud
+curl http://<NODE_IP>:30800/api/v1/health
+
+SCALING MANUEL :
+----------------
+# Scaler à 3 replicas
+kubectl scale deployment ml-service --replicas=3 -n production
+
+# Vérifier
+kubectl get pods -n production -l app=ml-service
+
+MISE À JOUR :
+-------------
+# Mettre à jour l'image
+kubectl set image deployment/ml-service \
+  ml-service=imen077/pi-dev-ml:2.0.0 \
+  -n production
+
+# Suivre le rollout
+kubectl rollout status deployment/ml-service -n production
+
+# Rollback si nécessaire
+kubectl rollout undo deployment/ml-service -n production
+
+═══════════════════════════════════════════════════════════════════════════
+PARTIE 5 : SONARQUBE
+═══════════════════════════════════════════════════════════════════════════
+
+FICHIER CRÉÉ :
+--------------
+✅ sonar-project.properties : Configuration SonarQube
+
+ÉTAPE 1 : CRÉER LE PROJET SONARQUBE
+------------------------------------
+1. Accédez à SonarQube : http://localhost:9000
+2. Create Project → Manually
+3. Project key : ml-service
+4. Display name : ML Service Python
+5. Générez un token
+6. Ajoutez le token dans Jenkins (sonar-token)
+
+ÉTAPE 2 : LANCER L'ANALYSE LOCALE
+----------------------------------
+cd PI-DEV-ML
+
+# Installer SonarScanner
+# Linux/Mac
+wget https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip
+unzip sonar-scanner-cli-5.0.1.3006-linux.zip
+export PATH=$PATH:$PWD/sonar-scanner-5.0.1.3006-linux/bin
+
+# Lancer les tests avec coverage
+pytest tests/ -v --cov=app --cov-report=xml
+
+# Lancer l'analyse
+sonar-scanner \
+  -Dsonar.projectKey=ml-service \
+  -Dsonar.sources=app \
+  -Dsonar.host.url=http://localhost:9000 \
+  -Dsonar.login=<VOTRE_TOKEN>
+
+ÉTAPE 3 : VÉRIFIER LES RÉSULTATS
+---------------------------------
+1. Accédez à SonarQube
+2. Cliquez sur le projet "ML Service Python"
+3. Vérifiez :
+   - Coverage > 70%
+   - Bugs : 0
+   - Vulnerabilities : 0
+   - Code Smells : < 10
+   - Quality Gate : Passed
+
+ÉTAPE 4 : PRENDRE DES CAPTURES
+-------------------------------
+Prenez des captures d'écran de :
+- Dashboard principal
+- Coverage
+- Code Smells
+- Bugs
+- Vulnerabilities
+- Quality Gate
+
+═══════════════════════════════════════════════════════════════════════════
+PARTIE 6 : MONITORING
+═══════════════════════════════════════════════════════════════════════════
+
+Le service ML est déjà intégré dans le monitoring global :
+
+PROMETHEUS :
+------------
+- Job : ml-service
+- Scraping : Pods avec label app=ml-service
+- Métriques : HTTP requests, latency, errors
+
+ALERTES CONFIGURÉES :
+---------------------
+1. MLServiceDown : Service indisponible > 2min
+2. MLServiceHighLatency : Latence P95 > 2s
+3. MLServiceHighErrorRate : Taux d'erreur > 5%
+
+GRAFANA :
+---------
+Créez un dashboard pour le ML Service :
+1. Accédez à Grafana : http://<NODE_IP>:30030
+2. Login : admin/admin123
+3. Create → Dashboard
+4. Add Panel
+5. Métriques à ajouter :
+   - Requêtes par seconde
+   - Latence moyenne/P95/P99
+   - Taux d'erreur
+   - Nombre de prédictions
+   - Temps de réponse par endpoint
+
+VÉRIFIER LE MONITORING :
+------------------------
+# Vérifier que Prometheus scrape le ML Service
+curl http://<NODE_IP>:30090/api/v1/targets | grep ml-service
+
+# Vérifier les métriques
+curl http://<NODE_IP>:30800/api/v1/metrics
+
+═══════════════════════════════════════════════════════════════════════════
+PARTIE 7 : TESTS D'INTÉGRATION
+═══════════════════════════════════════════════════════════════════════════
+
+TEST 1 : API LOCALE
+-------------------
+# Démarrer le service
+cd PI-DEV-ML
+source venv/bin/activate
+uvicorn app.main:app --reload
+
+# Tester les endpoints
+curl http://localhost:8000/
+curl http://localhost:8000/api/v1/health
+curl http://localhost:8000/api/v1/docs
+
+TEST 2 : DOCKER LOCAL
+---------------------
+# Build et run
+docker build -t ml-service:test .
+docker run -d -p 8000:8000 --name ml-test ml-service:test
+
+# Tester
+curl http://localhost:8000/api/v1/health
+
+# Cleanup
+docker stop ml-test && docker rm ml-test
+
+TEST 3 : KUBERNETES
+-------------------
+# Déployer
+kubectl apply -f k8s/
+
+# Attendre que les pods soient prêts
+kubectl wait --for=condition=ready pod -l app=ml-service -n production --timeout=300s
+
+# Tester
+NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[0].address}')
+curl http://$NODE_IP:30800/api/v1/health
+
+TEST 4 : PRÉDICTION
+-------------------
+curl -X POST http://$NODE_IP:30800/api/v1/predict/demand \
+  -H "Content-Type: application/json" \
+  -d '{
+    "product_id": "test-123",
+    "history": [
+      {"date": "2024-01-01", "quantity": 10, "product_name": "Test"},
+      {"date": "2024-01-02", "quantity": 12, "product_name": "Test"},
+      {"date": "2024-01-03", "quantity": 15, "product_name": "Test"},
+      {"date": "2024-01-04", "quantity": 11, "product_name": "Test"},
+      {"date": "2024-01-05", "quantity": 13, "product_name": "Test"}
+    ],
+    "prediction_days": 30
+  }'
+
+═══════════════════════════════════════════════════════════════════════════
+CHECKLIST FINALE - ML SERVICE
+═══════════════════════════════════════════════════════════════════════════
+
+PIPELINES CI/CD :
+□ Pipeline ml-service-ci créé dans Jenkins
+□ Pipeline ml-service-cd créé dans Jenkins
+□ Tests unitaires passent (15+ tests)
+□ Coverage > 70%
+□ Linting sans erreurs
+□ Security audit OK
+□ Déclenchement automatique CI → CD
+
+DOCKER :
+□ Dockerfile créé et testé
+□ Image buildée localement
+□ Image poussée sur Docker Hub (imen077/pi-dev-ml)
+□ Health check fonctionne
+□ Conteneur démarre correctement
+
+KUBERNETES :
+□ Tous les manifests créés (configmap, secret, service, deployment, hpa)
+□ Service déployé dans le namespace production
+□ 2 pods running
+□ Service accessible via NodePort 30800
+□ HPA configuré (2-5 replicas)
+□ Health checks fonctionnent
+
+SONARQUBE :
+□ Projet ml-service créé
+□ Analyse lancée avec succès
+□ Coverage > 70%
+□ Quality Gate passed
+□ Captures d'écran prises
+
+MONITORING :
+□ Prometheus scrape le ML Service
+□ Alertes configurées (3 alertes)
+□ Dashboard Grafana créé
+□ Métriques visibles
+
+TESTS :
+□ Tests unitaires OK (20 tests)
+□ Tests d'intégration OK
+□ API accessible et fonctionnelle
+□ Prédictions fonctionnent
+
+═══════════════════════════════════════════════════════════════════════════
+RÉSUMÉ DES PORTS
+═══════════════════════════════════════════════════════════════════════════
+
+Backend :     http://<NODE_IP>:30001
+Frontend :    http://<NODE_IP>:30080
+ML Service :  http://<NODE_IP>:30800
+Prometheus :  http://<NODE_IP>:30090
+Grafana :     http://<NODE_IP>:30030
+Alertmanager: http://<NODE_IP>:30093
+
+═══════════════════════════════════════════════════════════════════════════
+FIN DU GUIDE ML SERVICE
+═══════════════════════════════════════════════════════════════════════════
+
+Le service ML est maintenant complètement intégré dans l'infrastructure DevOps ! 🚀
