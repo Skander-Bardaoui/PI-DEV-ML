@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "postgresql://user:password@localhost:5432/pi_dev"
     
+    # Backend URL for fetching training data
+    BACKEND_URL: str = "http://localhost:3001"
+    
     # ML Configuration
     ML_MODEL_PATH: str = "./app/models/trained_models"
     MIN_DATA_POINTS: int = 5
