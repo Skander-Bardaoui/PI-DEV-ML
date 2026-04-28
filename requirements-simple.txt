@@ -1,0 +1,25 @@
+# FastAPI et serveur
+fastapi
+uvicorn[standard]
+pydantic
+python-multipart
+
+# Machine Learning
+scikit-learn
+imbalanced-learn
+pandas
+numpy
+
+# Base de données
+psycopg2-binary
+
+# Utilitaires
+python-dotenv
+httpx
+joblib
+
+# Monitoring et logs
+loguru
+
+# Tests
+requests

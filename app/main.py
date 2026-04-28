@@ -23,16 +23,21 @@ from app.schemas.sales_predictions import (
     ProductRecommendationRequest,
     ProductRecommendationResponse
 )
+from app.schemas.fraud_predictions import (
+    FraudTransactionInput,
+    FraudPredictionOutput,
+)
 from app.services.predictor import DemandPredictor
 from app.services.sales_predictor import SalesPredictor
 from app.services.data_processor import DataProcessor
+from app.services.fraud_predictor import FraudPredictor
 
-# Configuration des logs
+# Logging setup
 logger.remove()
 logger.add(sys.stdout, level=settings.LOG_LEVEL)
 logger.add(settings.LOG_FILE, rotation="500 MB", level=settings.LOG_LEVEL)
 
-# Initialisation de l'application
+# App init
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
@@ -41,7 +46,7 @@ app = FastAPI(
     redoc_url=f"{settings.API_V1_PREFIX}/redoc",
 )
 
-# Configuration CORS
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
@@ -50,208 +55,319 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialisation des services
-predictor = DemandPredictor()
+# Services
+predictor       = DemandPredictor()
 sales_predictor = SalesPredictor()
-data_processor = DataProcessor()
+data_processor  = DataProcessor()
+fraud_predictor = FraudPredictor()
 
 
 @app.on_event("startup")
 async def startup_event():
-    """Événement au démarrage de l'application"""
-    logger.info(f"🚀 Démarrage du service ML v{settings.VERSION}")
-    logger.info(f"📊 Chargement des modèles depuis {settings.ML_MODEL_PATH}")
+    logger.info(f"🚀 Starting ML service v{settings.VERSION}")
+    logger.info(f"📊 Loading models from {settings.ML_MODEL_PATH}")
     predictor.load_models()
-    logger.info("✅ Service ML prêt")
+    fraud_predictor.train()
+    logger.info("✅ ML service ready")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Événement à l'arrêt de l'application"""
-    logger.info("🛑 Arrêt du service ML")
+    logger.info("🛑 Shutting down ML service")
 
 
 @app.get("/")
 async def root():
-    """Page d'accueil de l'API"""
     return {
         "service": settings.PROJECT_NAME,
         "version": settings.VERSION,
-        "status": "running",
-        "docs": f"{settings.API_V1_PREFIX}/docs"
+        "status":  "running",
+        "docs":    f"{settings.API_V1_PREFIX}/docs"
     }
 
 
 @app.get(f"{settings.API_V1_PREFIX}/health")
 async def health_check():
-    """Health check endpoint"""
     return {
-        "status": "healthy",
-        "model_loaded": predictor.is_model_loaded(),
-        "version": settings.VERSION
+        "status":              "healthy",
+        "demand_model_loaded": predictor.is_model_loaded(),
+        "fraud_model_loaded":  fraud_predictor.is_model_loaded(),
+        "version":             settings.VERSION
     }
 
+
+# ─── Demand endpoints (unchanged) ────────────────────────────────────────────
 
 @app.post(
     f"{settings.API_V1_PREFIX}/predict/demand",
     response_model=PredictionResponse,
     summary="Prédire la demande pour un produit",
-    description="Analyse l'historique d'achat et prédit les besoins futurs"
 )
 async def predict_demand(request: PredictionRequest):
-    """
-    Prédire les besoins d'achat pour un produit spécifique
-    
-    - **product_id**: ID du produit
-    - **history**: Historique des achats
-    - **prediction_days**: Horizon de prédiction (défaut: 30 jours)
-    """
     try:
-        logger.info(f"📊 Prédiction demandée pour produit {request.product_id}")
-        
-        # Validation des données
+        logger.info(f"📊 Demand prediction for product {request.product_id}")
+
         if len(request.history) < settings.MIN_DATA_POINTS:
             raise HTTPException(
                 status_code=400,
-                detail=f"Données insuffisantes. Minimum {settings.MIN_DATA_POINTS} points requis, {len(request.history)} fournis."
+                detail=f"Minimum {settings.MIN_DATA_POINTS} data points required, "
+                       f"{len(request.history)} provided."
             )
-        
-        # Traitement des données
-        df = data_processor.prepare_dataframe(request.history)
-        
-        # Prédiction
+
+        df         = data_processor.prepare_dataframe(request.history)
         prediction = predictor.predict_next_purchase(
             df=df,
             product_id=request.product_id,
-            product_name=request.history[0].product_name if request.history else "Produit",
+            product_name=request.history[0].product_name if request.history else "Product",
             days_ahead=request.prediction_days
         )
-        
-        logger.info(f"✅ Prédiction réussie: {prediction['predicted_quantity']:.2f} unités")
+
+        logger.info(f"✅ Prediction: {prediction['predicted_quantity']:.2f} units")
         return prediction
-        
+
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ Erreur lors de la prédiction: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Erreur de prédiction: {str(e)}")
+        logger.error(f"❌ Demand prediction error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post(
     f"{settings.API_V1_PREFIX}/predict/batch",
     response_model=BatchPredictionResponse,
-    summary="Prédictions en batch",
-    description="Prédire pour plusieurs produits simultanément"
+    summary="Batch predictions",
 )
 async def predict_batch(request: BatchPredictionRequest):
-    """
-    Prédire les besoins pour plusieurs produits en une seule requête
-    """
     try:
-        logger.info(f"📊 Prédiction batch pour {len(request.products)} produits")
-        
-        predictions = []
-        errors = []
-        
+        logger.info(f"📊 Batch prediction for {len(request.products)} products")
+
+        predictions, errors = [], []
+
         for product_data in request.products:
             try:
                 if len(product_data.history) < settings.MIN_DATA_POINTS:
                     errors.append({
                         "product_id": product_data.product_id,
-                        "error": "Données insuffisantes"
+                        "error": "Insufficient data"
                     })
                     continue
-                
-                df = data_processor.prepare_dataframe(product_data.history)
+
+                df         = data_processor.prepare_dataframe(product_data.history)
                 prediction = predictor.predict_next_purchase(
                     df=df,
                     product_id=product_data.product_id,
-                    product_name=product_data.history[0].product_name if product_data.history else "Produit",
+                    product_name=product_data.history[0].product_name
+                        if product_data.history else "Product",
                     days_ahead=request.prediction_days
                 )
                 predictions.append(prediction)
-                
+
             except Exception as e:
-                errors.append({
-                    "product_id": product_data.product_id,
-                    "error": str(e)
-                })
-        
-        logger.info(f"✅ Batch terminé: {len(predictions)} succès, {len(errors)} erreurs")
-        
+                errors.append({"product_id": product_data.product_id, "error": str(e)})
+
+        logger.info(f"✅ Batch done: {len(predictions)} success, {len(errors)} errors")
+
         return {
-            "predictions": predictions,
-            "errors": errors,
+            "predictions":     predictions,
+            "errors":          errors,
             "total_processed": len(request.products),
-            "successful": len(predictions),
-            "failed": len(errors)
+            "successful":      len(predictions),
+            "failed":          len(errors)
         }
-        
+
     except Exception as e:
-        logger.error(f"❌ Erreur batch: {str(e)}")
+        logger.error(f"❌ Batch error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post(
     f"{settings.API_V1_PREFIX}/recommendations",
     response_model=RecommendationsResponse,
-    summary="Obtenir les recommandations d'achat",
-    description="Retourne les produits à commander en priorité"
+    summary="Get purchase recommendations",
 )
 async def get_recommendations(request: BatchPredictionRequest):
-    """
-    Générer des recommandations d'achat basées sur les prédictions
-    
-    Retourne uniquement les produits:
-    - Avec une confiance >= seuil configuré
-    - À commander dans les 30 prochains jours
-    - Triés par urgence
-    """
     try:
-        logger.info("📋 Génération des recommandations")
-        
-        # Obtenir toutes les prédictions
-        batch_result = await predict_batch(request)
-        
-        # Filtrer et trier les recommandations
+        logger.info("📋 Generating recommendations")
+
+        batch_result    = await predict_batch(request)
         recommendations = [
             pred for pred in batch_result["predictions"]
             if pred["confidence"] >= settings.CONFIDENCE_THRESHOLD
             and pred["days_until_order"] <= 30
         ]
-        
-        # Trier par urgence (date la plus proche en premier)
         recommendations.sort(key=lambda x: x["days_until_order"])
-        
-        # Calculer les statistiques
+
         urgent_count = len([r for r in recommendations if r["days_until_order"] <= 7])
-        total_value = sum(r.get("estimated_value", 0) for r in recommendations)
-        
-        logger.info(f"✅ {len(recommendations)} recommandations générées ({urgent_count} urgentes)")
-        
+        total_value  = sum(r.get("estimated_value", 0) for r in recommendations)
+
+        logger.info(
+            f"✅ {len(recommendations)} recommendations "
+            f"({urgent_count} urgent)"
+        )
+
         return {
-            "recommendations": recommendations,
+            "recommendations":       recommendations,
             "total_recommendations": len(recommendations),
-            "urgent_count": urgent_count,
+            "urgent_count":          urgent_count,
             "total_estimated_value": total_value,
-            "generated_at": data_processor.get_current_timestamp()
+            "generated_at":          data_processor.get_current_timestamp()
         }
-        
+
     except Exception as e:
-        logger.error(f"❌ Erreur recommandations: {str(e)}")
+        logger.error(f"❌ Recommendations error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ─── Sales endpoints (unchanged) ─────────────────────────────────────────────
+
+@app.post(
+    f"{settings.API_V1_PREFIX}/sales/forecast",
+    response_model=SalesForecastResponse,
+    summary="Prédire les ventes futures",
+)
+async def forecast_sales(request: SalesForecastRequest):
+    try:
+        logger.info(f"📊 Sales forecast for {request.forecast_days} days")
+
+        if len(request.sales_history) < 3:
+            raise HTTPException(
+                status_code=400,
+                detail="Minimum 3 history entries required"
+            )
+
+        history  = [item.dict() for item in request.sales_history]
+        forecast = sales_predictor.predict_sales_forecast(
+            sales_history=history,
+            forecast_days=request.forecast_days
+        )
+
+        logger.info(
+            f"✅ Forecast: {forecast['predicted_sales']:.2f} DT "
+            f"over {request.forecast_days} days"
+        )
+        return forecast
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Sales forecast error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(
+    f"{settings.API_V1_PREFIX}/sales/churn",
+    response_model=ClientChurnResponse,
+    summary="Prédire le risque de perte d'un client",
+)
+async def predict_churn(request: ClientChurnRequest):
+    try:
+        logger.info(f"📊 Churn analysis for client {request.client_id}")
+
+        if len(request.client_history) < 2:
+            raise HTTPException(
+                status_code=400,
+                detail="Minimum 2 purchases required for churn analysis"
+            )
+
+        history        = [item.dict() for item in request.client_history]
+        churn_analysis = sales_predictor.predict_client_churn(history)
+        churn_analysis["client_id"] = request.client_id
+
+        logger.info(f"✅ Churn risk: {churn_analysis['churn_risk_score']:.3f}")
+        return churn_analysis
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Churn prediction error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(
+    f"{settings.API_V1_PREFIX}/sales/recommendations",
+    response_model=ProductRecommendationResponse,
+    summary="Recommander des produits à un client",
+)
+async def recommend_products(request: ProductRecommendationRequest):
+    try:
+        logger.info(f"📊 Product recommendations for client {request.client_id}")
+
+        purchases       = [item.dict() for item in request.client_purchases]
+        products        = [item.dict() for item in request.available_products]
+        recommendations = sales_predictor.recommend_products(
+            client_purchases=purchases,
+            all_products=products
+        )
+
+        logger.info(f"✅ {len(recommendations)} products recommended")
+
+        return {
+            "client_id":             request.client_id,
+            "recommendations":       recommendations,
+            "total_recommendations": len(recommendations)
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Recommendations error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Fraud endpoint (NEW) ─────────────────────────────────────────────────────
+
+@app.post(
+    f"{settings.API_V1_PREFIX}/predict/fraud",
+    response_model=FraudPredictionOutput,
+    summary="Détecter une transaction frauduleuse",
+    description="Analyse une transaction et retourne un score de risque de fraude"
+)
+async def predict_fraud(request: FraudTransactionInput):
+    try:
+        logger.info(f"🔍 Fraud check — amount: {request.amount}")
+        result = fraud_predictor.predict(request.dict())
+        emoji  = "🚨" if result["is_fraud"] else "✅"
+        logger.info(
+            f"{emoji} Score: {result['fraud_score']} "
+            f"| Action: {result['action']}"
+        )
+        return result
+
+    except Exception as e:
+        logger.error(f"❌ Fraud prediction error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(
+    f"{settings.API_V1_PREFIX}/fraud/retrain",
+    summary="Ré-entraîner le modèle de fraude",
+    description="Déclenche un ré-entraînement sur les dernières données labellisées"
+)
+async def retrain_fraud_model():
+    """
+    Call this endpoint after your team has reviewed and labeled
+    flagged transactions (fraud_reviewed = true in the DB).
+    The model will retrain on the updated real data.
+    """
+    try:
+        logger.info("🔄 Retraining fraud model on demand...")
+        fraud_predictor.train()
+        return {
+            "status":       "success",
+            "model_ready":  fraud_predictor.is_model_loaded(),
+            "message":      "Fraud model retrained successfully"
+        }
+    except Exception as e:
+        logger.error(f"❌ Retrain error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Global error handler ─────────────────────────────────────────────────────
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
-    """Gestionnaire global des exceptions"""
-    logger.error(f"❌ Exception non gérée: {str(exc)}")
+    logger.error(f"❌ Unhandled exception: {exc}")
     return JSONResponse(
         status_code=500,
-        content={
-            "detail": "Erreur interne du serveur",
-            "error": str(exc)
-        }
+        content={"detail": "Internal server error", "error": str(exc)}
     )
 
 
@@ -264,127 +380,3 @@ if __name__ == "__main__":
         reload=True,
         log_level=settings.LOG_LEVEL.lower()
     )
-
-
-# ==================== SALES ML ENDPOINTS ====================
-
-@app.post(
-    f"{settings.API_V1_PREFIX}/sales/forecast",
-    response_model=SalesForecastResponse,
-    summary="Prédire les ventes futures",
-    description="Analyse l'historique des ventes et prédit le chiffre d'affaires futur"
-)
-async def forecast_sales(request: SalesForecastRequest):
-    """
-    Prédire les ventes futures basées sur l'historique
-    
-    - **sales_history**: Historique des ventes (min 3 entrées)
-    - **forecast_days**: Horizon de prédiction (défaut: 30 jours)
-    """
-    try:
-        logger.info(f"📊 Prédiction de ventes pour {request.forecast_days} jours")
-        
-        # Validation
-        if len(request.sales_history) < 3:
-            raise HTTPException(
-                status_code=400,
-                detail="Minimum 3 entrées d'historique requises"
-            )
-        
-        # Convertir en dict
-        history = [item.dict() for item in request.sales_history]
-        
-        # Prédiction
-        forecast = sales_predictor.predict_sales_forecast(
-            sales_history=history,
-            forecast_days=request.forecast_days
-        )
-        
-        logger.info(f"✅ Prédiction: {forecast['predicted_sales']:.2f} DT sur {request.forecast_days} jours")
-        return forecast
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ Erreur prédiction ventes: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post(
-    f"{settings.API_V1_PREFIX}/sales/churn",
-    response_model=ClientChurnResponse,
-    summary="Prédire le risque de perte d'un client",
-    description="Analyse le comportement d'achat et prédit le risque de churn"
-)
-async def predict_churn(request: ClientChurnRequest):
-    """
-    Prédire le risque qu'un client arrête d'acheter
-    
-    - **client_id**: ID du client
-    - **client_history**: Historique d'achats du client
-    """
-    try:
-        logger.info(f"📊 Analyse churn pour client {request.client_id}")
-        
-        # Validation
-        if len(request.client_history) < 2:
-            raise HTTPException(
-                status_code=400,
-                detail="Minimum 2 achats requis pour l'analyse"
-            )
-        
-        # Convertir en dict
-        history = [item.dict() for item in request.client_history]
-        
-        # Prédiction
-        churn_analysis = sales_predictor.predict_client_churn(history)
-        churn_analysis["client_id"] = request.client_id
-        
-        logger.info(f"✅ Risque de churn: {churn_analysis['churn_risk_score']:.3f}")
-        return churn_analysis
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ Erreur prédiction churn: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post(
-    f"{settings.API_V1_PREFIX}/sales/recommendations",
-    response_model=ProductRecommendationResponse,
-    summary="Recommander des produits à un client",
-    description="Suggère des produits basés sur l'historique d'achat du client"
-)
-async def recommend_products(request: ProductRecommendationRequest):
-    """
-    Recommander des produits personnalisés pour un client
-    
-    - **client_id**: ID du client
-    - **client_purchases**: Historique d'achats
-    - **available_products**: Produits disponibles
-    """
-    try:
-        logger.info(f"📊 Recommandations pour client {request.client_id}")
-        
-        # Convertir en dict
-        purchases = [item.dict() for item in request.client_purchases]
-        products = [item.dict() for item in request.available_products]
-        
-        # Générer recommandations
-        recommendations = sales_predictor.recommend_products(
-            client_purchases=purchases,
-            all_products=products
-        )
-        
-        logger.info(f"✅ {len(recommendations)} produits recommandés")
-        
-        return {
-            "client_id": request.client_id,
-            "recommendations": recommendations,
-            "total_recommendations": len(recommendations)
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Erreur recommandations: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
