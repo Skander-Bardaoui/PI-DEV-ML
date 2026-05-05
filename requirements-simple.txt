@@ -2,6 +2,7 @@
 fastapi
 uvicorn[standard]
 pydantic
+pydantic-settings
 python-multipart
 
 # Machine Learning
@@ -23,3 +24,5 @@ loguru
 
 # Tests
 requests
+pytest
+pytest-asyncio
