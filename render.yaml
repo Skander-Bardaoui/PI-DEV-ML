@@ -1,0 +1,63 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# RENDER BLUEPRINT - ML SERVICE
+# ═══════════════════════════════════════════════════════════════════════════
+# Ce fichier configure automatiquement votre service sur Render
+# Documentation: https://render.com/docs/blueprint-spec
+# ═══════════════════════════════════════════════════════════════════════════
+
+services:
+  # ─────────────────────────────────────────────────────────────────────────
+  # Service Web - API ML FastAPI
+  # ─────────────────────────────────────────────────────────────────────────
+  - type: web
+    name: ml-prediction-service
+    runtime: docker
+    plan: free  # Options: free, starter, standard
+    
+    # Configuration Docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    
+    # Configuration réseau
+    healthCheckPath: /api/v1/health
+    
+    # Variables d'environnement
+    envVars:
+      - key: PROJECT_NAME
+        value: ML Prediction Service
+      
+      - key: VERSION
+        value: 1.0.0
+      
+      - key: LOG_LEVEL
+        value: INFO
+      
+      - key: LOG_FILE
+        value: logs/ml_service.log
+      
+      - key: ML_MODEL_PATH
+        value: models/
+      
+      - key: MIN_DATA_POINTS
+        value: 3
+      
+      - key: CONFIDENCE_THRESHOLD
+        value: 0.6
+      
+      - key: API_V1_PREFIX
+        value: /api/v1
+      
+      # CORS - Modifiez selon vos besoins
+      - key: CORS_ORIGINS
+        value: '["*"]'  # En production, remplacez par vos domaines spécifiques
+        # Exemple: '["https://votre-frontend.com", "https://app.example.com"]'
+    
+    # Auto-deploy sur push GitHub
+    autoDeploy: true
+    
+    # Région (choisissez la plus proche de vos utilisateurs)
+    region: frankfurt  # Options: oregon, frankfurt, singapore
+    
+    # Scaling (pour plans payants)
+    # numInstances: 1
+    # maxInstances: 3
